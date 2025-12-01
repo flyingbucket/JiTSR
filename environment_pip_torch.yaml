@@ -1,0 +1,17 @@
+name: jit
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip=22.3
+  - pip:
+      - torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+      - torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+      - opencv-python==4.11.0.86
+      - numpy
+      - timm==0.9.12
+      - tensorboard==2.10.0
+      - scipy==1.9.1
+      - einops==0.8.1
+      - gdown==5.2.0
+      - -e git+https://github.com/LTH14/torch-fidelity.git@master#egg=torch-fidelity
