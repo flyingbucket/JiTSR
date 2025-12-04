@@ -32,8 +32,6 @@ def get_args_parser():
     )
 
     parser.add_argument("--resume", default="", type=str)
-    parser.add_argument("--device", default="cuda", type=str)
-    parser.add_argument("--local_rank", default=-1, type=int)
 
     return parser
 
@@ -42,12 +40,15 @@ def load_config(args):
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f)
 
-    # convert dict → flat namespace
     flat = {}
-    for group in cfg.values():
-        flat.update(group)
 
-    # merge into args
+    for k, v in cfg.items():
+        if isinstance(v, dict):
+            flat.update(v)  # 组内再展开
+        else:
+            flat[k] = v  # 顶层直接写
+
+    # 把 flat 里的所有键写进 args
     for k, v in flat.items():
         setattr(args, k, v)
 
@@ -85,6 +86,7 @@ def build_sr_transform(args):
 def main(args):
     args = get_args_parser().parse_args()
     args = load_config(args)
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     misc.init_distributed_mode(args)
     device = torch.device(args.device)
@@ -256,5 +258,4 @@ def main(args):
 
 if __name__ == "__main__":
     args = get_args_parser().parse_args()
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)

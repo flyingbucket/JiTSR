@@ -54,5 +54,8 @@ logging:
   log_freq: 100
 
 distributed:
-  dist_url: env://
+  device: cuda
   world_size: 1
+  local_rank: -1
+  dist_on_itp: false
+  dist_url: env://
