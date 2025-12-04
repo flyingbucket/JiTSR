@@ -1,0 +1,58 @@
+# =======================
+#   JiTSR SR Training Config
+# =======================
+
+architecture:
+  hr_size: 256
+  lr_size: 64
+  hr_patch: 16
+  lr_patch: 4
+  hidden_size: 1024
+  depth: 24
+  num_heads: 16
+  mlp_ratio: 4.0
+  bottleneck_dim: 128
+  in_context_start: 8
+  attn_dropout: 0.0
+  proj_dropout: 0.0
+
+training:
+  epochs: 200
+  batch_size: 128
+  warmup_epochs: 5
+  blr: 5e-5
+  lr_schedule: constant
+  weight_decay: 0.0
+  seed: 0
+  num_workers: 12
+  pin_mem: true
+
+edm:
+  noise_scale: 1.0
+  P_mean: -0.8
+  P_std: 0.8
+  t_eps: 0.05
+  ema_decay1: 0.9999
+  ema_decay2: 0.9996
+
+sampling:
+  sampling_method: heun
+  num_sampling_steps: 50
+  cfg: 1.0
+  interval_min: 0.0
+  interval_max: 1.0
+  gen_bsz: 64
+  online_eval: false
+  evaluate_gen: false
+
+dataset:
+  data_path: ./data/imagenet
+
+logging:
+  output_dir: ./output_jitsr
+  save_last_freq: 5
+  log_freq: 100
+
+distributed:
+  dist_url: env://
+  world_size: 1
