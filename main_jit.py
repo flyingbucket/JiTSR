@@ -304,9 +304,9 @@ def main(args):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
 
-        # 调试用 barrier：检测是否某个 rank 没进入 train_one_epoch()
-        if args.distributed:
-            torch.distributed.barrier()
+        # # 调试用 barrier：检测是否某个 rank 没进入 train_one_epoch()
+        # if args.distributed:
+        #     torch.distributed.barrier()
 
         train_one_epoch(
             model,
