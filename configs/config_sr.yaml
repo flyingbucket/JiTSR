@@ -20,6 +20,7 @@ training:
   epochs: 200
   batch_size: 128
   warmup_epochs: 5
+  lr: null
   blr: 5e-5
   lr_schedule: constant
   weight_decay: 0.0
@@ -46,7 +47,7 @@ sampling:
   evaluate_gen: false
 
 dataset:
-  data_path: ./data/imagenet
+  data_path: ../DataStore/ImageNet
 
 logging:
   output_dir: ./experiments/jitsr
@@ -55,7 +56,7 @@ logging:
 
 distributed:
   device: cuda
-  world_size: 1
+  world_size: 4
   local_rank: -1
   dist_on_itp: false
   dist_url: env://
