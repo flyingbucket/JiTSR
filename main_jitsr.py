@@ -19,9 +19,9 @@ from util.crop import center_crop_arr
 import util.misc as misc
 
 import copy
-from engine_jit import train_one_epoch, evaluate
 
 from denoiser_sr import DenoiserSR
+from engine_jitsr import load_config, train_one_epoch, evaluate
 
 
 def get_args_parser():
@@ -34,151 +34,6 @@ def get_args_parser():
     parser.add_argument("--resume", default="", type=str)
 
     return parser
-
-
-def load_config(args):
-    with open(args.config, "r") as f:
-        cfg = yaml.safe_load(f)
-
-    # flatten YAML groups
-    yaml_flat = {}
-    for k, v in cfg.items():
-        if isinstance(v, dict):
-            yaml_flat.update(v)
-        else:
-            yaml_flat[k] = v
-    DEFAULT_CFG = dict(
-        # ---------- architecture ----------
-        hr_size=256,
-        lr_size=64,
-        hr_patch=16,
-        lr_patch=4,
-        hidden_size=1024,
-        depth=24,
-        num_heads=16,
-        mlp_ratio=4.0,
-        bottleneck_dim=128,
-        in_context_start=8,
-        attn_dropout=0.0,
-        proj_dropout=0.0,
-        # ---------- training ----------
-        epochs=200,
-        warmup_epochs=5,
-        batch_size=128,
-        blr=5e-5,  # base lr
-        lr=None,  # 实际 lr，默认用 blr * batch_size / 256 算
-        min_lr=0.0,
-        lr_schedule="constant",
-        weight_decay=0.0,
-        seed=0,
-        start_epoch=0,
-        num_workers=12,
-        pin_mem=True,
-        # ---------- EDM ----------
-        noise_scale=1.0,
-        P_mean=-0.8,
-        P_std=0.8,
-        t_eps=0.05,
-        ema_decay1=0.9999,
-        ema_decay2=0.9996,
-        # ---------- sampling ----------
-        sampling_method="heun",
-        num_sampling_steps=50,
-        cfg=1.0,
-        interval_min=0.0,
-        interval_max=1.0,
-        gen_bsz=64,
-        online_eval=False,
-        evaluate_gen=False,
-        # 如果你的代码里有 args.eval_freq，就加上：
-        eval_freq=10,
-        # ---------- dataset ----------
-        data_path="./data/imagenet",
-        # ---------- logging ----------
-        output_dir="./experiments/jitsr",
-        save_last_freq=5,
-        log_freq=100,
-        # ---------- distributed ----------
-        device="cuda",
-        world_size=1,
-        local_rank=-1,
-        dist_on_itp=False,
-        dist_url="env://",
-    )
-
-    # load default values
-    for k, v in DEFAULT_CFG.items():
-        setattr(args, k, v)
-
-    # override defaults with YAML
-    for k, v in yaml_flat.items():
-        setattr(args, k, v)
-
-    # -----------------------------
-    # 强制类型修正（关键）
-    # -----------------------------
-    FLOAT_FIELDS = [
-        "blr",
-        "lr",
-        "min_lr",
-        "weight_decay",
-        "noise_scale",
-        "P_mean",
-        "P_std",
-        "t_eps",
-        "ema_decay1",
-        "ema_decay2",
-        "cfg",
-        "interval_min",
-        "interval_max",
-    ]
-
-    INT_FIELDS = [
-        "epochs",
-        "batch_size",
-        "warmup_epochs",
-        "num_workers",
-        "save_last_freq",
-        "log_freq",
-        "num_sampling_steps",
-        "gen_bsz",
-        "world_size",
-        "local_rank",
-        "depth",
-        "num_heads",
-        "hr_size",
-        "lr_size",
-        "hr_patch",
-        "lr_patch",
-        "bottleneck_dim",
-        "in_context_start",
-    ]
-
-    BOOL_FIELDS = ["pin_mem", "online_eval", "evaluate_gen", "dist_on_itp"]
-
-    # apply casting
-    for f in FLOAT_FIELDS:
-        if hasattr(args, f):
-            try:
-                v = getattr(args, f)
-                setattr(args, f, float(v) if v is not None else None)
-            except:
-                raise ValueError(f"Invalid float value for '{f}': {v}")
-
-    for f in INT_FIELDS:
-        if hasattr(args, f):
-            try:
-                setattr(args, f, int(getattr(args, f)))
-            except:
-                raise ValueError(f"Invalid int value for '{f}': {v}")
-
-    for f in BOOL_FIELDS:
-        if hasattr(args, f):
-            v = getattr(args, f)
-            if isinstance(v, str):
-                setattr(args, f, v.lower() in ["1", "true", "yes"])
-
-    return args
 
 
 # ========================================================================
