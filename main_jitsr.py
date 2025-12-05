@@ -2,26 +2,28 @@ import argparse
 import datetime
 import numpy as np
 import os
+import tempfile
 import time
 from pathlib import Path
 
+import torch
 import yaml
 from types import SimpleNamespace
 
 import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.tensorboard import SummaryWriter
-import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torch.nn.functional as F
 
-from util.crop import center_crop_arr
 import util.misc as misc
 
 import copy
 
 from denoiser_sr import DenoiserSR
-from engine_jitsr import load_config, train_one_epoch, evaluate
+from engine_jitsr import load_config, build_sr_transform, train_one_epoch, evaluate
+
+torch.set_float32_matmul_precision("high")
 
 
 def get_args_parser():
@@ -34,31 +36,6 @@ def get_args_parser():
     parser.add_argument("--resume", default="", type=str)
 
     return parser
-
-
-# ========================================================================
-#                         HR / LR Data Pipeline
-# ========================================================================
-def build_sr_transform(args):
-    """Return transform that makes HR + LR pairs."""
-    hr_size = args.hr_size
-    lr_size = args.lr_size
-
-    def make_pair(img):
-        img = center_crop_arr(img, hr_size)
-        img = transforms.functional.to_tensor(img)
-        hr = img
-
-        lr = F.interpolate(
-            hr.unsqueeze(0),
-            size=(lr_size, lr_size),
-            mode="bicubic",
-            align_corners=False,
-        ).squeeze(0)
-
-        return hr, lr  # each is (C,H,W)
-
-    return transforms.Lambda(make_pair)
 
 
 # ========================================================================
@@ -107,8 +84,8 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=True,
         collate_fn=lambda batch: (
-            torch.stack([b[0] for b in batch]),  # HR batch
-            torch.stack([b[1] for b in batch]),  # LR batch
+            torch.stack([b[0][0] for b in batch]),  # HR batch
+            torch.stack([b[0][1] for b in batch]),  # LR batch
         ),
     )
 
@@ -198,7 +175,7 @@ def main(args):
 
         # save "last"
         if epoch % args.save_last_freq == 0 or epoch + 1 == args.epochs:
-            misc.save_model(
+            misc.atomic_save_model(
                 args=args,
                 model_without_ddp=model_without_ddp,
                 optimizer=optimizer,
@@ -206,12 +183,13 @@ def main(args):
                 epoch_name="last",
             )
 
-        if epoch % 100 == 0 and epoch > 0:
-            misc.save_model(
+        if epoch % 50 == 0 and epoch > 0:
+            misc.atomic_save_model(
                 args=args,
                 model_without_ddp=model_without_ddp,
                 optimizer=optimizer,
                 epoch=epoch,
+                epoch_name=str(epoch),
             )
 
         # online evaluation

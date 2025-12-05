@@ -310,6 +310,47 @@ def save_model(args, model_without_ddp, optimizer, epoch, epoch_name=None):
     save_on_master(to_save, checkpoint_path)
 
 
+def atomic_save_model(args, model_without_ddp, optimizer, epoch, epoch_name=None):
+    if epoch_name is None:
+        epoch_name = str(epoch)
+
+    output_dir = Path(args.output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    real_path = output_dir / f"checkpoint-{epoch_name}.pth"
+    tmp_path = output_dir / f".checkpoint-{epoch_name}.pth.tmp"
+
+    # ------------------- build checkpoint dict -------------------
+    to_save = {
+        "model": model_without_ddp.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "epoch": epoch,
+        "args": args,
+    }
+
+    # ------------------- EMA params -------------------
+    ema_state_dict1 = copy.deepcopy(model_without_ddp.state_dict())
+    ema_state_dict2 = copy.deepcopy(model_without_ddp.state_dict())
+    for i, (name, _value) in enumerate(model_without_ddp.named_parameters()):
+        ema_state_dict1[name] = model_without_ddp.ema_params1[i]
+        ema_state_dict2[name] = model_without_ddp.ema_params2[i]
+    to_save["model_ema1"] = ema_state_dict1
+    to_save["model_ema2"] = ema_state_dict2
+
+    # ------------------- atomic write -------------------
+    if is_main_process():
+        try:
+            # 先写 tmp 文件
+            torch.save(to_save, tmp_path)
+            # 原子替换
+            os.replace(tmp_path, real_path)
+            print(f"[atomic save] checkpoint saved to {real_path}")
+        except Exception as e:
+            print(f"[atomic save] failed: {e}")
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+
 def all_reduce_mean(x):
     world_size = get_world_size()
     if world_size > 1:
@@ -319,4 +360,3 @@ def all_reduce_mean(x):
         return x_reduce.item()
     else:
         return x
-
