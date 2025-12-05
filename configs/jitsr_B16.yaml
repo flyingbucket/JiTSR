@@ -7,25 +7,25 @@ architecture:
   lr_size: 64
   hr_patch: 16
   lr_patch: 4
-  hidden_size: 1024
-  depth: 24
-  num_heads: 16
+  hidden_size: 768
+  depth: 12
+  num_heads: 12
   mlp_ratio: 4.0
   bottleneck_dim: 128
-  in_context_start: 8
+  in_context_start: 4
   attn_dropout: 0.0
   proj_dropout: 0.0
 
 training:
   epochs: 200
-  batch_size: 128
+  batch_size: 48
   warmup_epochs: 5
   lr: null
   blr: 5e-5
   lr_schedule: constant
   weight_decay: 0.0
   seed: 0
-  num_workers: 12
+  num_workers: 8
   pin_mem: true
 
 edm:
@@ -42,15 +42,16 @@ sampling:
   cfg: 1.0
   interval_min: 0.0
   interval_max: 1.0
-  gen_bsz: 64
-  online_eval: false
+  gen_bsz: 48
+  online_eval: true
+  eval_freq: 10
   evaluate_gen: false
 
 dataset:
-  data_path: ../DataStore/ImageNet
+  data_path: ../DataStore/ImageNet2012_subset
 
 logging:
-  output_dir: ./experiments/jitsr
+  output_dir: ./experiments/jitsr_B16
   save_last_freq: 5
   log_freq: 100
 
