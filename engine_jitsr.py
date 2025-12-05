@@ -1,15 +1,20 @@
 import yaml
 import os
-import math
 import sys
+import math
+from math import log10
 
-import cv2
+from PIL import Image
 import torch
+from torch.utils.data import Dataset
+import cv2
 import numpy as np
+
+import torch.nn.functional as F
+import torchvision.transforms as transforms
 
 import util.misc as misc
 import util.lr_sched as lr_sched
-import torch_fidelity
 import copy
 
 DEFAULT_CFG = dict(
@@ -156,6 +161,43 @@ def load_config(args):
     return args
 
 
+# ========================================================================
+#                         HR / LR Data Pipeline
+# ========================================================================
+def build_sr_transform(args):
+    hr_size = args.hr_size
+    lr_size = args.lr_size
+
+    def make_pair(pil_image):
+        # 1. convert to tensor first (safe, fast)
+        img = transforms.functional.to_tensor(pil_image)  # [C,H,W]
+
+        # 2. center crop using PyTorch (safe) instead of PIL
+        _, H, W = img.shape
+        crop = min(H, W)
+        y1 = (H - crop) // 2
+        x1 = (W - crop) // 2
+        img = img[:, y1 : y1 + crop, x1 : x1 + crop]
+
+        # 3. resize to HR using torch (safe)
+        img = img.unsqueeze(0)
+        hr = F.interpolate(
+            img, size=(hr_size, hr_size), mode="bicubic", align_corners=False
+        ).squeeze(0)
+
+        # 4. generate LR using torch (safe)
+        lr = F.interpolate(
+            hr.unsqueeze(0),
+            size=(lr_size, lr_size),
+            mode="bicubic",
+            align_corners=False,
+        ).squeeze(0)
+
+        return hr, lr
+
+    return transforms.Lambda(make_pair)
+
+
 def train_one_epoch(
     model,
     model_without_ddp,
@@ -238,23 +280,84 @@ def train_one_epoch(
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
+class SRFlatFolderDataset(Dataset):
+    def __init__(self, root, transform=None):
+        self.root = root
+        self.paths = [
+            os.path.join(root, f)
+            for f in os.listdir(root)
+            if f.lower().endswith(("jpg", "jpeg", "png"))
+        ]
+        self.paths.sort()
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, idx):
+        path = self.paths[idx]
+        img = Image.open(path).convert("RGB")
+        return self.transform(img)  # transform returns (HR, LR)
+
+
 @torch.no_grad()
 def evaluate(model_without_ddp, args, epoch, batch_size=32, log_writer=None):
     """
-    Super-Resolution evaluation (no FID / labels).
-    It loads LR images from validation set and generates HR outputs.
+    Super-Resolution evaluation with PSNR, SSIM, TensorBoard images.
+    No external libs (no skimage, no torchvision.metrics).
     """
 
+    # --------------------------------------
+    # Define PSNR
+    # --------------------------------------
+    def calc_psnr(sr, hr):
+        # sr, hr in [0,1], shape (B,3,H,W)
+        mse = F.mse_loss(sr, hr, reduction="mean")
+        if mse.item() == 0:
+            return 100
+        return 10 * log10(1.0 / mse.item())
+
+    # --------------------------------------
+    # Define SSIM (PyTorch implementation)
+    # --------------------------------------
+    def calc_ssim(sr, hr):
+        """Compute SSIM for (B,3,H,W), channel-wise averaged."""
+        C1 = 0.01**2
+        C2 = 0.03**2
+
+        # Gaussian-like 11x11 window (but using a fixed average kernel is okay for SR)
+        kernel = torch.ones((3, 1, 11, 11), device=sr.device) / (11 * 11)
+
+        mu_x = F.conv2d(sr, kernel, padding=5, groups=3)
+        mu_y = F.conv2d(hr, kernel, padding=5, groups=3)
+
+        mu_x2 = mu_x * mu_x
+        mu_y2 = mu_y * mu_y
+        mu_xy = mu_x * mu_y
+
+        sigma_x2 = F.conv2d(sr * sr, kernel, padding=5, groups=3) - mu_x2
+        sigma_y2 = F.conv2d(hr * hr, kernel, padding=5, groups=3) - mu_y2
+        sigma_xy = F.conv2d(sr * hr, kernel, padding=5, groups=3) - mu_xy
+
+        ssim_map = ((2 * mu_xy + C1) * (2 * sigma_xy + C2)) / (
+            (mu_x2 + mu_y2 + C1) * (sigma_x2 + sigma_y2 + C2)
+        )
+
+        return ssim_map.mean().item()
+
+    # --------------------------------------
+    # Setup
+    # --------------------------------------
     model_without_ddp.eval()
     device = torch.device(args.device)
     world_size = misc.get_world_size()
     rank = misc.get_rank()
 
-    # ----------------------------
+    # --------------------------------------
     # Build validation dataset
-    # ----------------------------
+    # --------------------------------------
     val_folder = os.path.join(args.data_path, "val")
-    dataset_val = datasets.ImageFolder(val_folder, transform=build_sr_transform(args))
+    dataset_val = SRFlatFolderDataset(val_folder, transform=build_sr_transform(args))
 
     sampler_val = torch.utils.data.DistributedSampler(
         dataset_val, num_replicas=world_size, rank=rank, shuffle=False
@@ -272,16 +375,16 @@ def evaluate(model_without_ddp, args, epoch, batch_size=32, log_writer=None):
         ),
     )
 
-    # ----------------------------
+    # --------------------------------------
     # Output folder
-    # ----------------------------
+    # --------------------------------------
     save_folder = os.path.join(args.output_dir, f"sr_epoch{epoch}")
     if rank == 0:
         os.makedirs(save_folder, exist_ok=True)
 
-    # ----------------------------
-    # Switch to EMA1 parameters
-    # ----------------------------
+    # --------------------------------------
+    # Switch to EMA1
+    # --------------------------------------
     model_state = copy.deepcopy(model_without_ddp.state_dict())
     ema_state = copy.deepcopy(model_without_ddp.state_dict())
     for i, (name, _) in enumerate(model_without_ddp.named_parameters()):
@@ -289,33 +392,61 @@ def evaluate(model_without_ddp, args, epoch, batch_size=32, log_writer=None):
     print("[Eval] Switch to EMA1")
     model_without_ddp.load_state_dict(ema_state)
 
-    # ----------------------------
-    # Inference loop
-    # ----------------------------
+    # --------------------------------------
+    # Evaluate
+    # --------------------------------------
+    global_psnr = []
+    global_ssim = []
+
+    # Only visualize first 3 batches
+    log_visual_limit = 3
+
     for it, (hr, lr) in enumerate(data_loader_val):
-        lr = lr.to(device)
         hr = hr.to(device)
+        lr = lr.to(device)
 
-        # generate SR
-        sr = model_without_ddp.generate(lr)  # (B,3,H,W)
+        # SR generation
+        sr = model_without_ddp.generate(lr)
+        sr = torch.clamp(sr, 0, 1)
 
-        sr = torch.clamp(sr, 0, 1).cpu()
-        hr = hr.cpu()
+        # --- Compute metrics ---
+        psnr_val = calc_psnr(sr, hr)
+        ssim_val = calc_ssim(sr, hr)
 
-        # ----------------------
-        # Save images
-        # ----------------------
-        for b in range(sr.size(0)):
+        global_psnr.append(psnr_val)
+        global_ssim.append(ssim_val)
+
+        # --- TensorBoard visualization ---
+        if log_writer is not None and rank == 0 and it < log_visual_limit:
+            # LR → upsample to HR shape for visual comparison
+            lr_up = F.interpolate(
+                lr, size=sr.shape[-2:], mode="bicubic", align_corners=False
+            )
+
+            # Combine LR_up | SR | HR into a single wide image
+            grid = torch.cat([lr_up.cpu(), sr.cpu(), hr.cpu()], dim=3)
+
+            log_writer.add_images(f"eval/samples_batch{it}", grid, epoch)
+
+        # --- Save SR images ---
+        sr_np = (sr.cpu().numpy() * 255).astype(np.uint8)
+        for b in range(sr_np.shape[0]):
             idx = it * batch_size + b
-            img = (sr[b].numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
-
+            img = sr_np[b].transpose(1, 2, 0)
             cv2.imwrite(os.path.join(save_folder, f"{str(idx).zfill(5)}.png"), img)
 
     torch.distributed.barrier()
 
-    # ----------------------------
-    # Restore original parameters
-    # ----------------------------
+    # --------------------------------------
+    # Log metrics
+    # --------------------------------------
+    if log_writer is not None and rank == 0:
+        log_writer.add_scalar("eval/psnr", sum(global_psnr) / len(global_psnr), epoch)
+        log_writer.add_scalar("eval/ssim", sum(global_ssim) / len(global_ssim), epoch)
+
+    # --------------------------------------
+    # Restore original params
+    # --------------------------------------
     print("[Eval] Restore original weights")
     model_without_ddp.load_state_dict(model_state)
 
