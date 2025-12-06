@@ -17,7 +17,7 @@ architecture:
   proj_dropout: 0.0
 
 training:
-  epochs: 200
+  epochs: 600
   batch_size: 48
   warmup_epochs: 5
   lr: null
@@ -44,7 +44,7 @@ sampling:
   interval_max: 1.0
   gen_bsz: 48
   online_eval: true
-  eval_freq: 10
+  eval_freq: 20
   evaluate_gen: false
 
 dataset:
