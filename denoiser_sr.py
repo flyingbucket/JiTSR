@@ -61,7 +61,7 @@ class DenoiserSR(nn.Module):
     # ======================================================
     #              TRAINING: v-prediction loss
     # ======================================================
-    def forward(self, hr, lr):
+    def forward(self, hr, lr, method="token"):
         """
         hr : (B, C, H, W) high-resolution ground truth
         lr : (B, C, h, w) low-resolution condition
@@ -83,7 +83,7 @@ class DenoiserSR(nn.Module):
         v = (hr - z) / (1 - t_broadcast).clamp_min(self.t_eps)
 
         # predicted HR from JiTSR
-        hr_pred = self.net(z, t, lr)
+        hr_pred = self.net(z, t, lr, method=method)
         v_pred = (hr_pred - z) / (1 - t_broadcast).clamp_min(self.t_eps)
 
         loss = ((v - v_pred) ** 2).mean()
