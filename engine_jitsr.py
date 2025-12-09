@@ -23,6 +23,7 @@ DEFAULT_CFG = dict(
     lr_size=64,
     hr_patch=16,
     lr_patch=4,
+    method="token",
     hidden_size=1024,
     depth=24,
     num_heads=16,
@@ -239,7 +240,7 @@ def train_one_epoch(
         # forward loss
         # ------------------------------
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            loss = model(hr, lr)
+            loss = model(hr, lr, method=args.method)
 
         loss_value = loss.item()
         if not math.isfinite(loss_value):

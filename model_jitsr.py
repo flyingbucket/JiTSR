@@ -148,46 +148,119 @@ class JiTSR(JiT):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def forward(self, hr, t, lr):
+    def forward(self, hr, t, lr, method="token"):
         """
-        hr: (B, C, H, W)  -- noisy high-res
-        lr: (B, C, H_lr, W_lr) -- low-res condition
+        hr: (B, C, H, W)        -- noisy high-res input
+        lr: (B, C, H_lr, W_lr)  -- low-res condition
         t:  (B,)
+        method: "token" | "concat"
         """
+
         # ---- Condition embedding ----
         t_emb = self.t_embedder(t)  # (B, H)
 
-        # LR tokens
-        lr_emb = self.lr_embedder(lr)  # (B, T_lr, H)
-        lr_emb = lr_emb + self.lr_posemb  # learnable LR position embedding
+        # AdaLN conditioning global vector (method-specific)
+        if method == "token":
+            # ----------------------------
+            # Method 1: Token-based in-context LR fusion
+            # ----------------------------
+            lr_emb = self.lr_embedder(lr)  # (B, T_lr, H)
+            lr_emb = lr_emb + self.lr_posemb
 
-        # global LR embedding for AdaLN conditioning
-        lr_global_emb = lr_emb.mean(dim=1)
-        c = t_emb + lr_global_emb  # AdaLN conditioning vector
+            lr_global_emb = lr_emb.mean(dim=1)
+            c = t_emb + lr_global_emb
 
-        # ---- HR tokens ----
-        x = self.x_embedder(hr)  # (B, T_hr, H)
-        x = x + self.pos_embed  # fixed 2D sin/cos
+            # ---- HR tokens ----
+            x = self.x_embedder(hr)  # (B, T_hr, H)
+            x = x + self.pos_embed
 
-        # ---- Transformer blocks ----
-        inserted = False
-        for i, block in enumerate(self.blocks):
-            # insert LR tokens only once
-            if (not inserted) and (i == self.in_context_start):
-                x = torch.cat([lr_emb, x], dim=1)
-                inserted = True
+            inserted = False
+            for i, block in enumerate(self.blocks):
+                if (not inserted) and (i == self.in_context_start):
+                    x = torch.cat([lr_emb, x], dim=1)
+                    inserted = True
 
-            # choose RoPE (offset after LR tokens insertion)
-            rope = self.feat_rope_incontext if inserted else self.feat_rope
+                rope = self.feat_rope_incontext if inserted else self.feat_rope
+                x = block(x, c, rope)
 
-            x = block(x, c, rope)
+            if inserted:
+                x = x[:, self.in_context_len :]  # remove LR tokens
 
-        # ---- remove LR tokens ----
-        if inserted:
-            x = x[:, self.in_context_len :]  # remove LR tokens
+            x = self.final_layer(x, c)
+            out = self.unpatchify(x, self.patch_size)
+            return out
 
-        # ---- Final stage ----
-        x = self.final_layer(x, c)
-        out = self.unpatchify(x, self.patch_size)
+        # ----------------------------
+        # Method 2: UNet-style concat (image-level)
+        # ----------------------------
+        elif method == "concat":
+            # 1. 上采样 LR 至 HR 尺寸
+            lr_up = F.interpolate(
+                lr, size=hr.shape[-2:], mode="bicubic", align_corners=False
+            )  # (B, C, H, W)
 
-        return out
+            # 2. 按通道拼接 noisy-HR 与 upsampled LR
+            hr_cat = torch.cat([hr, lr_up], dim=1)  # (B, C_hr + C_lr, H, W)
+
+            # 3. 作为主输入编码
+            x = self.x_embedder(hr_cat)  # (B, T, H)
+            x = x + self.pos_embed
+
+            # 4. 全局 LR embedding 用于 AdaLN（用上采样版本即可）
+            lr_global_emb = self.lr_image_global_embed(lr_up)  # 新增模块
+            c = t_emb + lr_global_emb
+
+            # 5. Transformer 不使用 LR tokens，直接处理 x
+            for block in self.blocks:
+                x = block(x, c, self.feat_rope)
+
+            x = self.final_layer(x, c)
+            out = self.unpatchify(x, self.patch_size)
+            return out
+
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+    # def forward(self, hr, t, lr, method="token"):
+    #     """
+    #     hr: (B, C, H, W)  -- noisy high-res
+    #     lr: (B, C, H_lr, W_lr) -- low-res condition
+    #     t:  (B,)
+    #     """
+    #     # ---- Condition embedding ----
+    #     t_emb = self.t_embedder(t)  # (B, H)
+    #
+    #     # LR tokens
+    #     lr_emb = self.lr_embedder(lr)  # (B, T_lr, H)
+    #     lr_emb = lr_emb + self.lr_posemb  # learnable LR position embedding
+    #
+    #     # global LR embedding for AdaLN conditioning
+    #     lr_global_emb = lr_emb.mean(dim=1)
+    #     c = t_emb + lr_global_emb  # AdaLN conditioning vector
+    #
+    #     # ---- HR tokens ----
+    #     x = self.x_embedder(hr)  # (B, T_hr, H)
+    #     x = x + self.pos_embed  # fixed 2D sin/cos
+    #
+    #     # ---- Transformer blocks ----
+    #     inserted = False
+    #     for i, block in enumerate(self.blocks):
+    #         # insert LR tokens only once
+    #         if (not inserted) and (i == self.in_context_start):
+    #             x = torch.cat([lr_emb, x], dim=1)
+    #             inserted = True
+    #
+    #         # choose RoPE (offset after LR tokens insertion)
+    #         rope = self.feat_rope_incontext if inserted else self.feat_rope
+    #
+    #         x = block(x, c, rope)
+    #
+    #     # ---- remove LR tokens ----
+    #     if inserted:
+    #         x = x[:, self.in_context_len :]  # remove LR tokens
+    #
+    #     # ---- Final stage ----
+    #     x = self.final_layer(x, c)
+    #     out = self.unpatchify(x, self.patch_size)
+    #
+    #     return out

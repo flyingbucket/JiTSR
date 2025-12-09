@@ -7,7 +7,7 @@ architecture:
   lr_size: 64
   hr_patch: 16
   lr_patch: 4
-  method: "token"
+  method: "concat"
   hidden_size: 1024
   depth: 24
   num_heads: 16
