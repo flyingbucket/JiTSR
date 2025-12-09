@@ -57,9 +57,13 @@ class JiTSR(JiT):
         # Time embedding
         self.t_embedder = TimestepEmbedder(hidden_size)
 
-        # HR patch embedder
+        # HR patch embedder for method token
         self.x_embedder = BottleneckPatchEmbed(
             input_size, patch_size, in_channels, bottleneck_dim, hidden_size
+        )
+        # HR patch embedder for method concat
+        self.x_embedder_concat = BottleneckPatchEmbed(
+            input_size, patch_size, in_channels * 2, bottleneck_dim, hidden_size
         )
 
         # Fixed HR pos embed
@@ -203,11 +207,14 @@ class JiTSR(JiT):
             hr_cat = torch.cat([hr, lr_up], dim=1)  # (B, C_hr + C_lr, H, W)
 
             # 3. 作为主输入编码
-            x = self.x_embedder(hr_cat)  # (B, T, H)
+            x = self.x_embedder_concat(hr_cat)  # (B, T, H)
             x = x + self.pos_embed
 
             # 4. 全局 LR embedding 用于 AdaLN（用上采样版本即可）
-            lr_global_emb = self.lr_image_global_embed(lr_up)  # 新增模块
+            lr_emb = self.lr_embedder(lr)  # (B, T_lr, H)
+            lr_emb = lr_emb + self.lr_posemb
+
+            lr_global_emb = lr_emb.mean(dim=1)
             c = t_emb + lr_global_emb
 
             # 5. Transformer 不使用 LR tokens，直接处理 x
