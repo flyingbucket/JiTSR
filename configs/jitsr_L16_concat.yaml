@@ -19,7 +19,7 @@ architecture:
 
 training:
   epochs: 300
-  batch_size: 16
+  batch_size: 18
   warmup_epochs: 10
   lr: null
   blr: 1e-4
@@ -43,16 +43,16 @@ sampling:
   cfg: 1.0
   interval_min: 0.0
   interval_max: 1.0
-  gen_bsz: 48
+  gen_bsz: 18
   online_eval: true
   eval_freq: 10
   evaluate_gen: false
 
 dataset:
-  data_path: ../DataStore/ImageNet2012_subset
+  data_path: ../DataStore/ImageNet2012_subset_20k
 
 logging:
-  output_dir: ./experiments/jitsr_B16_v2
+  output_dir: ./experiments/jitsr_L16_concat
   save_last_freq: 5
   log_freq: 100
 
