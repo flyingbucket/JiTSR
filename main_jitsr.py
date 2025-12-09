@@ -95,7 +95,9 @@ def main(args):
     model = DenoiserSR(args)
     model.to(device)
 
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+    model = torch.nn.parallel.DistributedDataParallel(
+        model, device_ids=[args.gpu], find_unused_parameters=True
+    )
     model_without_ddp = model.module
 
     # learning rate
