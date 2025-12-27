@@ -54,6 +54,16 @@ class JiTSR(JiT):
         )
         torch.nn.init.normal_(self.lr_posemb, 0.02)
 
+        # LR token 的 role / type embedding
+        self.lr_type_emb = nn.Parameter(
+            torch.zeros(1, 1, hidden_size), requires_grad=True
+        )
+
+        # LR token 的 projection / gating（不改维度，只改“自由度”）
+        self.lr_proj = nn.Sequential(
+            nn.LayerNorm(hidden_size),
+            nn.Linear(hidden_size, hidden_size, bias=False),
+        )
         # Time embedding
         self.t_embedder = TimestepEmbedder(hidden_size)
 
@@ -225,6 +235,38 @@ class JiTSR(JiT):
             out = self.unpatchify(x, self.patch_size)
             return out
 
+        elif method == "asym_token":
+            # ---- LR tokens (as condition anchors) ----
+            lr_emb = self.lr_embedder(lr)  # (B, T_lr, H)
+            lr_emb = lr_emb + self.lr_posemb
+            lr_emb = self.lr_proj(lr_emb)
+            lr_emb = lr_emb + self.lr_type_emb
+            lr_global_emb = lr_emb.mean(dim=1)
+
+            c = t_emb + lr_global_emb
+
+            # ---- HR tokens ----
+            x = self.x_embedder(hr)  # (B, T_hr, H)
+            x = x + self.pos_embed
+            x = x + self.hr_type_emb  # ★ role embedding
+
+            inserted = False
+            for i, block in enumerate(self.blocks):
+                if (not inserted) and (i >= self.in_context_start):
+                    x = torch.cat([lr_emb, x], dim=1)
+                    inserted = True
+
+                rope = self.feat_rope_incontext if inserted else self.feat_rope
+
+                # ★ block 内部使用 asymmetric attention
+                x = block(x, c, rope, attn_bias=self.lr_hr_bias if inserted else None)
+
+            if inserted:
+                x = x[:, self.in_context_len :]
+
+            x = self.final_layer(x, c)
+            out = self.unpatchify(x, self.patch_size)
+            return out
         else:
             raise ValueError(f"Unknown method: {method}")
 
